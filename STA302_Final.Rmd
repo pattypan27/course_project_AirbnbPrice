@@ -1,0 +1,315 @@
+---
+title: "Exploration of Factors that Affecting Airbnb Price Using Multiple Linear Regression"
+author: "Liuyi Pan"
+date: "2021/12/17"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(knitr)
+library(car)
+library(MASS)
+```
+
+# Data
+
+## Data Loading
+```{r, echo=FALSE}
+ATdata <- read.csv("AT.csv", header=T)
+```
+
+## Data Cleaning
+```{r}
+AT1 <- ATdata[,c(1,16:18,23,25,26,33:34,36,37,40,56,61)]
+# str(AT1)
+```
+
+```{r}
+AT2 <- AT1 %>%
+  filter(host_response_rate != "N/A" & host_response_rate != "") %>%
+  filter(host_acceptance_rate != "N/A" & host_acceptance_rate != "") %>%
+  filter(host_is_superhost != "") %>%
+  filter(host_total_listings_count != "") %>%
+  filter(host_has_profile_pic != "") %>%
+  filter(host_identity_verified != "") %>%
+  filter(bathrooms_text != "") %>%
+  filter(bedrooms != "") %>%
+  filter(review_scores_rating != "")
+
+# str(AT2)
+```
+
+```{r}
+AT3 <- AT2 %>%
+  mutate(host_response_rate = gsub("%", "", host_response_rate)) %>% 
+  mutate(host_acceptance_rate = gsub("%", "", host_acceptance_rate)) %>%
+  mutate(bathrooms_text = case_when(bathrooms_text == "Half-bath" | bathrooms_text == "Shared half-bath" | bathrooms_text == "Private half-bath" ~ "0.5",
+                                    bathrooms_text != "Half-bath" | bathrooms_text != "Shared half-bath" | bathrooms_text != "Private half-bath" ~ bathrooms_text)) %>%
+  mutate(bathrooms_text = gsub(" baths", "", bathrooms_text)) %>%
+  mutate(bathrooms_text = gsub(" bath", "", bathrooms_text)) %>%
+  mutate(bathrooms_text = gsub(" private", "", bathrooms_text)) %>%
+  mutate(bathrooms_text = gsub(" shared", "", bathrooms_text)) %>%
+  mutate(host_response_rate = as.numeric(host_response_rate)) %>% 
+  mutate(host_acceptance_rate = as.numeric(host_acceptance_rate)) %>%
+  mutate(bathrooms = as.numeric(bathrooms_text))
+AT3 <- AT3[,-c(10)] 
+str(AT3)
+```
+
+## Data Spliting
+```{r}
+# create a 50/50 split in the data
+set.seed(1)
+train <- AT3[sample(1:nrow(AT3), 3072, replace=F), ]
+test <- AT3[which(!(AT3$id %in% train$id)),]
+```
+
+## EDA
+```{r}
+# num
+apply(train[,c(2,3,5,9:14)], 2, mean)
+apply(test[,c(2,3,5,9:14)], 2, mean)
+
+apply(train[,c(2,3,5,9:14)], 2, sd)
+apply(test[,c(2,3,5,9:14)], 2, sd)
+```
+
+```{r, fig.width=11, fig.height=4}
+# cate
+par(mfrow=c(2,4))
+boxplot(price ~ host_is_superhost, data = train, main = "Boxplot of Price and whether host is superhost", cex.main = 0.9)
+boxplot(price ~ host_has_profile_pic, data = train, main = "Boxplot of Price and whether host has profile picture", cex.main = 0.9)
+boxplot(price ~ host_identity_verified, data = train, main = "Boxplot of Price and whether host's identity is verified", cex.main = 0.9)
+boxplot(price ~ room_type, data = train, main = "Boxplot of Price and room type", cex.main = 0.9)
+
+boxplot(price ~ host_is_superhost, data = test, main = "Boxplot of Price and whether host is superhost", cex.main = 0.9)
+boxplot(price ~ host_has_profile_pic, data = test, main = "Boxplot of Price and whether host has profile picture", cex.main = 0.9)
+boxplot(price ~ host_identity_verified, data = test, main = "Boxplot of Price and whether host's identity is verified", cex.main = 0.9)
+boxplot(price ~ room_type, data = test, main = "Boxplot of Price and room type", cex.main = 0.9)
+```
+
+
+# Method
+## mod1
+```{r}
+mod1 <- lm(price ~., data=train[,-c(1)])
+summary(mod1)
+vif(mod1)
+```
+
+### check mod1 assum
+```{r, fig.width=9, fig.height=7}
+# check cond1
+plot(train$price ~ fitted(mod1), main="Y vs Fitted", xlab="Fitted", ylab="Price")
+lines(lowess(train$price ~ fitted(mod1)), lty=2, col = "blue")
+abline(a = 0, b = 1, col = "red")
+# check cond2
+pairs(train[,c(2,3,5,9:14)])
+```
+
+```{r}
+# check normal
+qqnorm(rstandard(mod1))
+qqline(rstandard(mod1))
+```
+
+
+```{r}
+# try transformations
+AT4 <- AT3 %>% 
+  mutate(host_response_rate2 = host_response_rate+0.01) %>% 
+  mutate(host_acceptance_rate2 = host_acceptance_rate+0.01) %>% 
+  mutate(host_total_listings_count2 = host_total_listings_count+0.01) %>%
+  mutate(review_scores_rating2 = review_scores_rating+0.01) %>% 
+  mutate(bathrooms2 = bathrooms+0.01)
+#str(AT4)
+```
+
+```{r}
+AT4 <- AT4[,c(9:12,15:19)]
+p <- powerTransform(cbind(AT4))
+summary(p)
+```
+
+
+```{r}
+train$logaccommodates <- log(train$accommodates)
+train$logbedrooms <- log(train$bedrooms)
+train$logprice <- log(train$price)
+train$lognumber_of_reviews <- log(train$number_of_reviews)
+train$squhost_response_rate <- (train$host_response_rate)^2
+train$loghost_total_listings_count <- log(train$host_total_listings_count+0.01)
+train$ninereview_scores_rating <- (train$review_scores_rating)^9
+train$sqrtbathrooms <- sqrt(train$bathrooms)
+train2 <- train[,-c(1,2,5,9:14)]
+#str(train2)
+test$logaccommodates <- log(test$accommodates)
+test$logbedrooms <- log(test$bedrooms)
+test$logprice <- log(test$price)
+test$lognumber_of_reviews <- log(test$number_of_reviews)
+test$squhost_response_rate <- (test$host_response_rate)^2
+test$loghost_total_listings_count <- log(test$host_total_listings_count+0.01)
+test$ninereview_scores_rating <- (test$review_scores_rating)^9
+test$sqrtbathrooms <- sqrt(test$bathrooms)
+test2 <- test[,-c(1,2,5,9:14)]
+```
+
+
+## mod2
+
+```{r}
+# refit
+mod2 <- lm(logprice ~ ., data=train2)
+summary(mod2)
+vif(mod2)
+```
+
+### check mod2 assum
+```{r, fig.width=8, fig.height=7}
+# check cond1
+plot(train2$logprice ~ fitted(mod2), main="Y vs Fitted", xlab="Fitted", ylab="Price")
+lines(lowess(train2$logprice ~ fitted(mod2)), lty=2, col = "blue")
+abline(a = 0, b = 1, col = "red")
+# check cond2
+pairs(train2[,c(1,6:13)])
+```
+
+```{r, fig.width=8, fig.height=3}
+# check residual plots
+par(mfrow=c(2,5))
+plot(rstandard(mod2)~fitted(mod2), xlab="fitted", ylab="Residuals")
+for(i in c(1,6,7,9:13)){
+  plot(rstandard(mod2)~train2[,i], xlab=names(train2)[i], ylab="Residuals")
+}
+# check normal
+qqnorm(rstandard(mod2))
+qqline(rstandard(mod2))
+```
+
+## mod3
+
+```{r}
+mod3 <- lm(logprice ~., data = train2[,-c(1,3,4,9)])
+summary(mod3)
+vif(mod3)
+```
+
+### check mod3 assum
+```{r, fig.width=8, fig.height=6}
+# check cond1
+plot(train2$logprice ~ fitted(mod3), main="Transformed Y vs Fitted", xlab="Fitted", ylab="Transformed Price")
+lines(lowess(train2$logprice ~ fitted(mod3)), lty=2, col = "blue")
+abline(a = 0, b = 1, col = "red")
+# check cond2
+pairs(train2[,c(6:8,10:13)])
+```
+
+```{r, fig.width=5, fig.height=6}
+# check residual plots
+par(mfrow=c(4,3))
+plot(rstandard(mod3)~fitted(mod3), xlab="fitted", ylab="Residuals")
+for(i in c(6,7,10:13)){
+  plot(rstandard(mod3)~train2[,i], xlab=names(train2)[i], ylab="Residuals")
+}
+# check normal
+qqnorm(rstandard(mod3))
+qqline(rstandard(mod3))
+```
+
+```{r}
+anova(mod3, mod2)
+```
+
+
+# Selection
+
+```{r}
+select = function(model, n)
+{
+  Rsq_adj <- summary(model)$adj.r.squared
+  p <- length(model$coefficients) - 1
+  AIC <- AIC(model)
+  BIC <- BIC(model)
+  res <- c(Rsq_adj, AIC, BIC)
+  names(res) <- c("Rsq_adj", "AIC", "BIC")
+  return(res)
+}
+```
+
+```{r}
+select(mod2, 3072)
+select(mod3, 3072)
+```
+
+## Problematic
+
+```{r}
+select2 = function(model, n)
+{
+  p <- length(model$coefficients) - 1
+  
+  # leverage
+  h2 <- hatvalues(model)
+  numLev <- length(which(h2 > 2*((p+1)/n)))
+  
+  # outlier
+  r2 <- rstandard(model)
+  numOut <- length(which(r2 < -4 | r2 > 4))
+  
+  # influential
+  Dcutoff <- qf(0.5, p+1, n-p-1)
+  D2 <- cooks.distance(model)
+  numDcook <- length(which(D2 > Dcutoff))
+
+  prob <- c(numLev, numOut, numDcook)
+  names(prob) <- c("number of Leverage points", "number of ouliers", "number of influential points")
+  return(prob)
+}
+```
+
+```{r}
+select2(mod1,3072)
+select2(mod2,3072)
+select2(mod3,3072)
+```
+
+# test
+
+## mod3test
+```{r}
+mod3test <- lm(logprice ~ ., data=test2[,-c(1,3,4,9)])
+summary(mod3test)
+vif(mod3test)
+```
+
+### check mod3test assum
+```{r, fig.width=8, fig.height=6}
+# check cond1
+plot(test2$logprice ~ fitted(mod3test), main="Y vs Fitted", xlab="Fitted", ylab="Price")
+lines(lowess(test2$logprice ~ fitted(mod3test)), lty=2, col = "blue")
+abline(a = 0, b = 1, col = "red")
+# check cond2
+pairs(test2[,c(6:8,10:13)])
+```
+
+```{r, fig.width=6, fig.height=3}
+# check residual plots
+par(mfrow=c(2,4))
+plot(rstandard(mod3test)~fitted(mod3test), xlab="fitted", ylab="Residuals")
+for(i in c(6,7,10:13)){
+  plot(rstandard(mod3test)~test2[,i], xlab=names(test2)[i], ylab="Residuals")
+}
+# check normal
+qqnorm(rstandard(mod3test))
+qqline(rstandard(mod3test))
+```
+
+```{r}
+select(mod3test, 3071)
+select2(mod3test, 3071)
+```
+
+
+
